@@ -1,24 +1,50 @@
-
+import atexit
 import logging
+import logging.config
+import logging.handlers
+from queue import Queue
+from contextlib import asynccontextmanager
+from typing import AsyncContextManager
+
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 from starlette.responses import JSONResponse
 
 from core.config import uvicorn_options
 from api.v1 import api_router
-from core.logger import setup_logging
+from core.logger import setup_logging, LOGGING_CONFIG
 
 
-app = FastAPI(
-    docs_url="/api/openapi",
-)
-logger = logging.getLogger("my_app")
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncContextManager[None]:
+    logging.config.dictConfig(LOGGING_CONFIG)
+    log_queue = Queue(-1)
 
-app.include_router(api_router)
+    # Получаем корневой логгер и находим обработчик очереди
+    root_logger = logging.getLogger()
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    listener = logging.handlers.QueueListener(log_queue, *root_logger.handlers)
+
+    # Добавляем QueueHandler к корневому логгеру
+    root_logger.addHandler(queue_handler)
+
+    try:
+        listener.start()
+        atexit.register(listener.stop)
+        yield
+    finally:
+        listener.stop()
+
 
 setup_logging()
+app = FastAPI(lifespan=lifespan, docs_url="/api/openapi")
+logger = logging.getLogger("my_app")
+
+# Добавление роутеров
+app.include_router(api_router)
 
 
+# Middleware для обработки ошибок
 @app.middleware("http")
 async def error_middleware(request: Request, call_next):
     try:
@@ -37,6 +63,7 @@ async def error_middleware(request: Request, call_next):
         )
 
 
+# Обработчики исключений
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
     logger.error(f"{request.url} | Error in application: {exc}")
@@ -57,7 +84,4 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 if __name__ == '__main__':
     print(uvicorn_options)
-    uvicorn.run(
-        'main:app',
-        **uvicorn_options
-    )
+    uvicorn.run('main:app', **uvicorn_options)

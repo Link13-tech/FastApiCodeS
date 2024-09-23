@@ -18,7 +18,7 @@ user_router = APIRouter(prefix="/user", tags=['user'])
 #         return response.json()
 
 @user_router.get("/{user_id}", response_model=UserResponse)
-async def get_user(user_id: int, db: AsyncSession = Depends(db_dependency)):
+async def get_user(user_id: int, db: db_dependency):
     # Выполняем запрос к базе данных
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
