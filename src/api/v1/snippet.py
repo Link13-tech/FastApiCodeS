@@ -1,11 +1,18 @@
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
+
+from sqlalchemy.orm import joinedload
+
 from auth.auth import get_current_user
 import logging
+
+from core.config import settings
 from db.db import db_dependency
 from models import User
 from models.snippet import Snippet
-from schemas.snippet import SnippetCreate, SnippetResponse
-from typing import List
+from schemas.snippet import SnippetCreate, SnippetResponse, SnippetDisplay
 from sqlalchemy.future import select
 
 snippet_router = APIRouter(prefix="/snippets", tags=['snippets'])
@@ -13,7 +20,7 @@ logger = logging.getLogger("my_app")
 
 
 # Создание код-сниппета
-@snippet_router.post("/", response_model=SnippetResponse)
+@snippet_router.post("/create_snippet", response_model=SnippetDisplay, name="Создать сниппет")
 async def create_snippet(snippet: SnippetCreate, db: db_dependency, current_user: User = Depends(get_current_user)):
     logger.debug("Функция create_snippet вызвана")
     logger.info(f"Создание сниппета для пользователя: {current_user.id} с заголовком: {snippet.title}")
@@ -24,45 +31,29 @@ async def create_snippet(snippet: SnippetCreate, db: db_dependency, current_user
         await db.commit()
         await db.refresh(db_snippet)
 
-        logger.info(f"Сниппет создан с ID: {db_snippet.id}, UUID: {db_snippet.uuid}")
+        logger.info(f"Сниппет создан с UUID: {db_snippet.uuid}")
         return {
-            "id": db_snippet.id,
-            "uuid": db_snippet.uuid,
+            "uuid": str(db_snippet.uuid),
             "title": db_snippet.title,
             "code": db_snippet.code,
+            "author_name": db_snippet.author.name,
             "is_public": db_snippet.is_public,
+            "share_link": f"http://{settings.app_host}:{settings.app_port}/snippets/get_snippet/{db_snippet.uuid}"
         }
     except Exception as e:
         logger.error(f"Ошибка при создании сниппета: {e}")
         raise HTTPException(status_code=500, detail="Ошибка при создании сниппета")
 
 
-# Получение код-сниппета по ID
-@snippet_router.get("/{snippet_id}", response_model=SnippetResponse)
-async def get_snippet(snippet_id: int, db: db_dependency, current_user: User = Depends(get_current_user)):
-    logger.debug("Функция get_snippet вызвана")
-    logger.info(f"Запрос сниппета по ID: {snippet_id} для пользователя: {current_user.id}")
-
-    db_snippet = await db.get(Snippet, snippet_id)
-    if db_snippet is None:
-        logger.warning(f"Сниппет с ID: {snippet_id} не найден")
-        raise HTTPException(status_code=404, detail="Snippet not found")
-
-    return {
-        "id": db_snippet.id,
-        "title": db_snippet.title,
-        "code": db_snippet.code,
-        "is_public": db_snippet.is_public,
-    }
-
-
 # Получение код-сниппета по UUID
-@snippet_router.get("/uuid/{snippet_uuid}", response_model=SnippetResponse)
+@snippet_router.get("/get_snippet/{snippet_uuid}", response_model=SnippetResponse, name="Получить сниппет по UUID")
 async def get_snippet_by_uuid(snippet_uuid: str, db: db_dependency):
     logger.debug("Функция get_snippet_by_uuid вызвана")
     logger.info(f"Запрос сниппета по UUID: {snippet_uuid}")
 
-    db_snippet = await db.execute(select(Snippet).where(Snippet.uuid == snippet_uuid))
+    db_snippet = await db.execute(
+        select(Snippet).options(joinedload(Snippet.author)).where(Snippet.uuid == snippet_uuid)
+    )
     db_snippet = db_snippet.scalars().first()
 
     if db_snippet is None:
@@ -70,43 +61,68 @@ async def get_snippet_by_uuid(snippet_uuid: str, db: db_dependency):
         raise HTTPException(status_code=404, detail="Snippet not found")
 
     return {
-        "id": db_snippet.id,
+        "uuid": str(db_snippet.uuid),
         "title": db_snippet.title,
         "code": db_snippet.code,
+        "author_name": db_snippet.author.name,
         "is_public": db_snippet.is_public,
     }
 
 
-# Получение всех код-сниппетов для авторизованного пользователя
-@snippet_router.get("/", response_model=List[SnippetResponse])
-async def get_snippets(db: db_dependency, current_user: User = Depends(get_current_user)):
-    logger.debug("Функция get_snippets вызвана")
-    logger.info(f"Запрос всех сниппетов для пользователя: {current_user.id}")
+# Получение всех публичных код-сниппетов
+@snippet_router.get("/all_snippets", response_model=List[SnippetResponse], name="Получить все сниппеты")
+async def get_all_snippets(
+    db: db_dependency,
+    current_user: User = Depends(get_current_user)
+):
+    logger.debug("Функция get_all_snippets вызвана")
+    logger.info(f"Запрос всех сниппетов пользователем: {current_user.id}")
 
-    query = select(Snippet)
-    result = await db.execute(query)
-    snippets = result.scalars().all()
+    try:
+        # Получаем публичные сниппеты
+        public_query = select(Snippet).options(joinedload(Snippet.author)).filter(Snippet.is_public.is_(True))
+        public_result = await db.execute(public_query)
+        public_snippets = public_result.scalars().all()
 
+        # Получаем личные сниппеты текущего пользователя, которые не публичные
+        personal_query = select(Snippet).options(joinedload(Snippet.author)).filter(
+            Snippet.author_id == current_user.id,
+            Snippet.is_public.is_(False)
+        )
+        personal_result = await db.execute(personal_query)
+        personal_snippets = personal_result.scalars().all()
+
+        # Объединяем списки, используя множество для уникальности
+        snippets_set = {snippet.uuid: snippet for snippet in public_snippets + personal_snippets}
+
+    except Exception as e:
+        logger.error(f"Ошибка при получении всех сниппетов: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка при получении всех сниппетов")
+
+    # Формируем ответ
     return [
         {
-            "id": snippet.id,
+            "uuid": str(snippet.uuid),
             "title": snippet.title,
             "code": snippet.code,
+            "author_name": snippet.author.name,
             "is_public": snippet.is_public,
-        } for snippet in snippets
+        } for snippet in snippets_set.values()
     ]
 
 
 # Обновление код-сниппета
-@snippet_router.put("/{snippet_id}", response_model=SnippetResponse)
-async def update_snippet(snippet_id: int, snippet: SnippetCreate, db: db_dependency, current_user: User = Depends(get_current_user)):
+@snippet_router.put("/update_snippet/{snippet_uuid}", response_model=SnippetResponse, name="Обновить сниппет")
+async def update_snippet(snippet_uuid: str, snippet: SnippetCreate, db: db_dependency, current_user: User = Depends(get_current_user)):
     logger.debug("Функция update_snippet вызвана")
-    logger.info(f"Обновление сниппета с ID: {snippet_id} для пользователя: {current_user.id}")
+    logger.info(f"Обновление сниппета с UUID: {snippet_uuid} для пользователя: {current_user.id}")
 
-    db_snippet = await db.get(Snippet, snippet_id)
+    db_snippet = await db.execute(select(Snippet).where(Snippet.uuid == snippet_uuid))
+    db_snippet = db_snippet.scalars().first()
+
     if db_snippet is None or db_snippet.author_id != current_user.id:
-        logger.warning(f"Сниппет с ID: {snippet_id} не найден или доступ запрещен")
-        raise HTTPException(status_code=404, detail="Snippet not found or not authorized")
+        logger.warning(f"Сниппет с UUID: {snippet_uuid} не найден или доступ запрещен")
+        raise HTTPException(status_code=404, detail="Snippet not found or not authorized(Сниппет не найден или не принадлежит вам)")
 
     for key, value in snippet.dict().items():
         setattr(db_snippet, key, value)
@@ -114,44 +130,30 @@ async def update_snippet(snippet_id: int, snippet: SnippetCreate, db: db_depende
     await db.commit()
     await db.refresh(db_snippet)
 
-    logger.info(f"Сниппет с ID: {snippet_id} обновлен")
+    logger.info(f"Сниппет с UUID: {snippet_uuid} обновлен")
     return {
-        "id": db_snippet.id,
+        "uuid": str(db_snippet.uuid),
         "title": db_snippet.title,
         "code": db_snippet.code,
+        "author_name": db_snippet.author.name,
         "is_public": db_snippet.is_public,
     }
 
 
 # Удаление код-сниппета
-@snippet_router.delete("/{snippet_id}", response_model=dict)
-async def delete_snippet(snippet_id: int, db: db_dependency, current_user: User = Depends(get_current_user)):
+@snippet_router.delete("/delete_snippet/{snippet_uuid}", response_model=dict, name="Удалить сниппет")
+async def delete_snippet(snippet_uuid: str, db: db_dependency, current_user: User = Depends(get_current_user)):
     logger.debug("Функция delete_snippet вызвана")
-    logger.info(f"Удаление сниппета с ID: {snippet_id} для пользователя: {current_user.id}")
+    logger.info(f"Удаление сниппета с UUID: {snippet_uuid} для пользователя: {current_user.id}")
 
-    db_snippet = await db.get(Snippet, snippet_id)
+    db_snippet = await db.execute(select(Snippet).where(Snippet.uuid == snippet_uuid))
+    db_snippet = db_snippet.scalars().first()
+
     if db_snippet is None or db_snippet.author_id != current_user.id:
-        logger.warning(f"Сниппет с ID: {snippet_id} не найден или доступ запрещен")
-        raise HTTPException(status_code=404, detail="Snippet not found or not authorized")
+        logger.warning(f"Сниппет с UUID: {snippet_uuid} не найден или доступ запрещен")
+        raise HTTPException(status_code=404, detail="Snippet not found or not authorized(Сниппет не найден или не принадлежит вам)")
 
     await db.delete(db_snippet)
     await db.commit()
-    logger.info(f"Сниппет с ID: {snippet_id} удален")
+    logger.info(f"Сниппет с UUID: {snippet_uuid} удален")
     return {"detail": "Snippet deleted"}
-
-
-# Генерация ссылки для общего доступа по UUID
-@snippet_router.get("/share/{uuid}")
-async def share_snippet(uuid: str, db: db_dependency):
-    logger.debug("Функция share_snippet вызвана")
-    logger.info(f"Генерация ссылки для сниппета с UUID: {uuid}")
-
-    db_snippet = await db.execute(select(Snippet).where(Snippet.uuid == uuid))
-    db_snippet = db_snippet.scalar_one_or_none()
-
-    if db_snippet is None:
-        logger.warning(f"Сниппет с UUID: {uuid} не найден")
-        raise HTTPException(status_code=404, detail="Snippet not found")
-
-    logger.debug(f"Ссылка для сниппета с UUID: {uuid} сгенерирована")
-    return {"share_link": f"http://yourdomain.com/snippets/{db_snippet.uuid}"}

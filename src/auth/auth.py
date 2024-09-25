@@ -1,6 +1,6 @@
 from calendar import timegm
 from datetime import timedelta, datetime
-from typing import Optional, Annotated, Dict
+from typing import Optional, Annotated
 
 import bcrypt
 from asyncpg import UniqueViolationError
@@ -88,18 +88,27 @@ async def authenticate_user(login_data: UserLoginSchema, db: db_dependency):
     return user
 
 
-async def get_current_user(token: str = Depends(oauth2_bearer)):
+async def get_current_user(db: db_dependency, token: str = Depends(oauth2_bearer)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[ALGORITHM])
-        user_data = {"sub": payload.get("sub")}
-        if user_data is None:
+        # Декодируем токен и получаем email из поля 'sub'
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.algorithm])
+        user_email: str = payload.get("sub")
+        if user_email is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    return user_data
-user_dependency = Annotated[Dict, Depends(get_current_user)]
+
+    # Ищем пользователя в базе данных по email
+    result = await db.execute(select(User).where(User.email == user_email))
+    user: Optional[User] = result.scalars().first()
+
+    if user is None:
+        raise credentials_exception
+    return user
+user_dependency = Annotated[User, Depends(get_current_user)]

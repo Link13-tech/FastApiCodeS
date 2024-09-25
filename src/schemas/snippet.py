@@ -8,8 +8,17 @@ class SnippetCreate(BaseModel):
 
 
 class SnippetResponse(BaseModel):
-    id: int
     uuid: str
     title: str
     code: str
+    author_name: str
     is_public: bool = True
+
+
+class SnippetDisplay(BaseModel):
+    uuid: str
+    title: str
+    code: str
+    author_name: str
+    is_public: bool = True
+    share_link: str

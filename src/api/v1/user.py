@@ -17,19 +17,19 @@ user_router = APIRouter(prefix="/user", tags=['user'])
 #         response = await client.get(f'/users/{user_id}')
 #         return response.json()
 
-@user_router.get("/{user_id}", response_model=UserResponse)
-async def get_user(user_id: int, db: db_dependency):
-    # Выполняем запрос к базе данных
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
+# @user_router.get("/{user_id}", response_model=UserResponse)
+# async def get_user(user_id: int, db: db_dependency):
+#     # Выполняем запрос к базе данных
+#     result = await db.execute(select(User).where(User.id == user_id))
+#     user = result.scalar_one_or_none()
+#
+#     if user is None:
+#         raise HTTPException(status_code=404, detail="User not found")
+#
+#     return user
 
-    if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
 
-    return user
-
-
-@user_router.post("/register")
+@user_router.post("/register", name="Регистрация")
 async def register_user(user_data: UserRegisterSchema, db: db_dependency):
     try:
         return await reg_user(user_data=user_data, db=db)
@@ -38,7 +38,7 @@ async def register_user(user_data: UserRegisterSchema, db: db_dependency):
                             detail=f"Аn error has occurred: {ex}")
 
 
-@user_router.post("/login")
+@user_router.post("/login", name="Вход")
 async def login_for_access_token(db: db_dependency, login_data: UserLoginSchema):
     user = await authenticate_user(login_data, db)
     if not user:
