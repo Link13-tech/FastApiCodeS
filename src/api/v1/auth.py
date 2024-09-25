@@ -28,11 +28,11 @@ async def token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     return {'access_token': access_token, 'token_type': 'bearer'}
 
 
-@auth_router.get("/current_user",  response_model=UserResponse)
-async def get_current_user(user: user_dependency):
-    logger.debug(f"Retrieved user: {user}")
-    return {
-        "id": user.id,
-        "name": user.name,
-        "email": user.email,
-    }
+# @auth_router.get("/current_user",  response_model=UserResponse)
+# async def get_current_user(user: user_dependency):
+#     logger.debug(f"Retrieved user: {user}")
+#     return {
+#         "id": user.id,
+#         "name": user.name,
+#         "email": user.email,
+#     }

@@ -38,16 +38,16 @@ async def register_user(user_data: UserRegisterSchema, db: db_dependency):
                             detail=f"Аn error has occurred: {ex}")
 
 
-@user_router.post("/login", name="Вход")
-async def login_for_access_token(db: db_dependency, login_data: UserLoginSchema):
-    user = await authenticate_user(login_data, db)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    access_token = create_access_token(
-        data={"sub": {"email": user.email}}
-    )
-    return {"access_token": access_token, "token_type": "bearer"}
+# @user_router.post("/login", name="Вход")
+# async def login_for_access_token(db: db_dependency, login_data: UserLoginSchema):
+#     user = await authenticate_user(login_data, db)
+#     if not user:
+#         raise HTTPException(
+#             status_code=status.HTTP_401_UNAUTHORIZED,
+#             detail="Incorrect username or password",
+#             headers={"WWW-Authenticate": "Bearer"},
+#         )
+#     access_token = create_access_token(
+#         data={"sub": {"email": user.email}}
+#     )
+#     return {"access_token": access_token, "token_type": "bearer"}
